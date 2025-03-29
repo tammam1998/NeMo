@@ -150,7 +150,13 @@ def kmeans_plusplus_torch(
 
     centers = torch.zeros(n_clusters, n_features, dtype=X.dtype)
     center_id = torch.randint(0, n_samples, (1,)).long()
-    indices = torch.full([n_clusters,], -1, dtype=torch.int)
+    indices = torch.full(
+        [
+            n_clusters,
+        ],
+        -1,
+        dtype=torch.int,
+    )
 
     centers[0] = X[center_id].squeeze(0)
     indices[0] = center_id.squeeze(0)
@@ -383,7 +389,7 @@ def getRepeatedList(mapping_argmat: torch.Tensor, score_mat_size: torch.Tensor) 
     return repeat_list
 
 
-def get_argmin_mat(timestamps_in_scales: List[torch.Tensor]) -> List[torch.Tensor]:
+def get_argmin_mat(timestamps_in_scales: List[torch.Tensor], is_longform: bool = False) -> List[torch.Tensor]:
     """
     Calculate the mapping between the base scale and other scales. A segment from a longer scale is
     repeatedly mapped to a segment from a shorter scale or the base scale.
@@ -407,9 +413,15 @@ def get_argmin_mat(timestamps_in_scales: List[torch.Tensor]) -> List[torch.Tenso
     session_scale_mapping_list = []
     for scale_idx in scale_list:
         curr_scale_anchor = segment_anchor_list[scale_idx]
-        curr_mat = torch.tile(curr_scale_anchor, (base_scale_anchor.shape[0], 1))
-        base_mat = torch.tile(base_scale_anchor, (curr_scale_anchor.shape[0], 1)).t()
-        argmin_mat = torch.argmin(torch.abs(curr_mat - base_mat), dim=1)
+        if is_longform:
+            session_scale_mapping = []
+            for value in base_scale_anchor:
+                session_scale_mapping.append(torch.argmin(torch.abs(segment_anchor_list[scale_idx] - value)).item())
+            argmin_mat = torch.tensor(session_scale_mapping, dtype=torch.int64)
+        else:
+            curr_mat = curr_scale_anchor.expand(base_scale_anchor.shape[0], -1)
+            base_mat = base_scale_anchor.expand(curr_scale_anchor.shape[0], -1).t()
+            argmin_mat = torch.argmin(torch.abs(curr_mat - base_mat), dim=1)
         session_scale_mapping_list.append(argmin_mat)
     return session_scale_mapping_list
 
@@ -443,6 +455,7 @@ def get_scale_interpolated_embs(
     multiscale_weights: torch.Tensor,
     embeddings_in_scales: List[torch.Tensor],
     timestamps_in_scales: List[torch.Tensor],
+    is_longform: bool = False,
     device: torch.device = torch.device('cpu'),
 ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
     """
@@ -470,7 +483,7 @@ def get_scale_interpolated_embs(
     """
     rep_mat_list = []
     multiscale_weights = multiscale_weights.to(device)
-    session_scale_mapping_list = get_argmin_mat(timestamps_in_scales)
+    session_scale_mapping_list = get_argmin_mat(timestamps_in_scales, is_longform=is_longform)
     scale_list = list(range(len(timestamps_in_scales)))
     for scale_idx in scale_list:
         mapping_argmat = session_scale_mapping_list[scale_idx]
@@ -511,7 +524,7 @@ def getMultiScaleCosAffinityMatrix(
 
     Returns:
         fused_sim_d (Tensor):
-            An affinity matrix that is obtained by calculating the weighted sum of 
+            An affinity matrix that is obtained by calculating the weighted sum of
             the multiple affinity matrices from the different scales.
     """
     multiscale_weights = torch.squeeze(multiscale_weights, dim=0).to(device)
@@ -986,8 +999,12 @@ class NMESC:
         est_spk_n_dict: Dict[int, torch.Tensor] = {}
         self.p_value_list = self.getPvalueList()
         p_volume = self.p_value_list.shape[0]
-        eig_ratio_list = torch.zeros(p_volume,)
-        est_num_of_spk_list = torch.zeros(p_volume,)
+        eig_ratio_list = torch.zeros(
+            p_volume,
+        )
+        est_num_of_spk_list = torch.zeros(
+            p_volume,
+        )
 
         if self.parallelism:
             futures: List[torch.jit.Future[torch.Tensor]] = []
@@ -1176,10 +1193,10 @@ class SpeakerClustering(torch.nn.Module):
         kmeans_random_trials: int = 1,
     ) -> torch.LongTensor:
         """
-        This function takes a cosine similarity matrix `mat` and returns the speaker labels for the segments 
-        in the given input embeddings. 
-       
-        Args: 
+        This function takes a cosine similarity matrix `mat` and returns the speaker labels for the segments
+        in the given input embeddings.
+
+        Args:
             mat (Tensor):
                 Cosine similarity matrix (affinity matrix) calculated from the provided speaker embeddings.
             oracle_num_speakers (int):
@@ -1202,8 +1219,8 @@ class SpeakerClustering(torch.nn.Module):
                 This value should be optimized on a development set for best results.
                 By default, it is set to -1.0, and the function performs NME-analysis to estimate the threshold.
             kmeans_random_trials (int):
-                The number of random trials for initializing k-means clustering. More trials can result in more stable clustering. The default is 1. 
-                
+                The number of random trials for initializing k-means clustering. More trials can result in more stable clustering. The default is 1.
+
         Returns:
             Y (LongTensor):
                 Speaker labels (clustering output) in integer format for the segments in the given input embeddings.

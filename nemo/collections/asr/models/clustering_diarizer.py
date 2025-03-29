@@ -49,6 +49,16 @@ from nemo.collections.asr.parts.utils.vad_utils import (
 from nemo.core.classes import Model
 from nemo.utils import logging, model_utils
 
+try:
+    from torch.amp import autocast
+except ImportError:
+    from contextlib import contextmanager
+
+    @contextmanager
+    def autocast(enabled=None):
+        yield
+
+
 __all__ = ['ClusteringDiarizer']
 
 _MODEL_CONFIG_YAML = "model_config.yaml"
@@ -213,7 +223,7 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
             tqdm(self._vad_model.test_dataloader(), desc='vad', leave=True, disable=not self.verbose)
         ):
             test_batch = [x.to(self._vad_model.device) for x in test_batch]
-            with torch.amp.autocast(self._vad_model.device.type):
+            with autocast(str(self._vad_model.device)):
                 log_probs = self._vad_model(input_signal=test_batch[0], input_signal_length=test_batch[1])
                 probs = torch.softmax(log_probs, dim=-1)
                 pred = probs[:, 1]
@@ -349,7 +359,7 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
         ):
             test_batch = [x.to(self._speaker_model.device) for x in test_batch]
             audio_signal, audio_signal_len, labels, slices = test_batch
-            with torch.amp.autocast(self._speaker_model.device.type):
+            with autocast(str(self._speaker_model.device)):
                 _, embs = self._speaker_model.forward(input_signal=audio_signal, input_signal_length=audio_signal_len)
                 emb_shape = embs.shape[-1]
                 embs = embs.view(-1, emb_shape)
